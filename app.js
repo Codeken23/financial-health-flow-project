@@ -130,23 +130,15 @@ async function fileBytes(file){return await new Promise((resolve,reject)=>{let r
 async function pdfText(file){let bytes=await fileBytes(file),pdf=await pdfjsLib.getDocument({data:bytes}).promise,out=[];for(let n=1;n<=pdf.numPages;n++){let p=await pdf.getPage(n),t=await p.getTextContent(),items=t.items.filter(x=>x.str);items.sort((a,b)=>Math.abs(b.transform[5]-a.transform[5])>3?b.transform[5]-a.transform[5]:a.transform[4]-b.transform[4]);let lines=[],cur=[],y=null;for(let it of items){let iy=it.transform[5];if(y===null||Math.abs(iy-y)<=3){cur.push(it);y=y===null?iy:y}else{lines.push(cur.sort((a,b)=>a.transform[4]-b.transform[4]).map(x=>x.str).join(' '));cur=[it];y=iy}}if(cur.length)lines.push(cur.sort((a,b)=>a.transform[4]-b.transform[4]).map(x=>x.str).join(' '));out.push(lines.join('\n'))}return out.join('\n')}
 function parseBankPDF(text,file){
  let lines=text.split(/\n+/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean),rows=[],year=Number((text.match(/through\s+\w+\s+\d{1,2},\s*(20\d{2})/i)||[])[1])||new Date().getFullYear(),pending=null;
- const dateRe=/^(\d{2}\/\d{2})\s+/, pairRe=/(-?\$?[\d,]+\.\d{2})\s+(-?\$?[\d,]+\.\d{2})\s*$/, oneRe=/(-?\$?[\d,]+\.\d{2})\s*$/;
- const val=s=>Number(String(s).replace(/[$,]/g,'')),make=(date,desc,amt,type)=>{let fp=[date,desc.toLowerCase().replace(/\s+/g,' ').trim(),Math.abs(amt).toFixed(2),type].join('|');rows.push({household_id:hh.id,transaction_date:date,description:desc,amount:Math.abs(amt),transaction_type:type,source_file:file,fingerprint:fp,review_status:'Pending'})};
+ const dateRe=/^(\d{2}\/\d{2})\s+/, pairRe=/(-?[\d,]+\.\d{2})\s+(-?[\d,]+\.\d{2})\s*$/;
+ const val=s=>Number(String(s).replace(/[$,]/g,''));
+ const add=(date,desc,amt)=>{let type=amt<0?'Debit':'Credit',n=Math.abs(amt),fp=[date,desc.toLowerCase().replace(/\s+/g,' ').trim(),n.toFixed(2),type].join('|');rows.push({household_id:hh.id,transaction_date:date,description:desc,amount:n,transaction_type:type,source_file:file,fingerprint:fp,review_status:'Pending'})};
  for(let line of lines){
   let dm=line.match(dateRe);
-  if(dm){
-   let [mm,dd]=dm[1].split('/'),date=year+'-'+mm+'-'+dd,rest=line.slice(dm[0].length).trim(),pair=rest.match(pairRe),one=rest.match(oneRe);
-   if(pair){let amt=val(pair[1]),desc=rest.slice(0,pair.index).trim();make(date,desc,amt,amt<0?'Debit':'Credit');pending=null}
-   else if(one){let last=val(one[1]),desc=rest.slice(0,one.index).trim(),credit=/deposit|payment from|transfer from|refund|interest/i.test(desc),debit=/purchase|payment to|transfer to|withdrawal|direct debit|loanpymnt|fee/i.test(desc);if(credit||debit){make(date,desc,last,credit&&!debit?'Credit':'Debit');pending=null}else pending={date,desc:rest}}
-   else pending={date,desc:rest};
-  }else if(pending){
-   let pair=line.match(pairRe),one=line.match(oneRe);
-   if(pair){let amt=val(pair[1]);make(pending.date,(pending.desc+' '+line.slice(0,pair.index)).trim(),amt,amt<0?'Debit':'Credit');pending=null}
-   else if(one){let amt=val(one[1]),desc=(pending.desc+' '+line.slice(0,one.index)).trim();make(pending.date,desc,amt,amt<0?'Debit':'Credit');pending=null}
-   else if(!/^(page|date description|account number|transaction detail)/i.test(line))pending.desc+=' '+line;
-  }
+  if(dm){pending=null;let p=dm[1].split('/'),date=year+'-'+p[0]+'-'+p[1],rest=line.slice(dm[0].length).trim(),pair=rest.match(pairRe);if(pair){add(date,rest.slice(0,pair.index).trim(),val(pair[1]))}else{pending={date,desc:rest}};continue}
+  if(pending){let pair=line.match(/^(-?[\d,]+\.\d{2})\s+(-?[\d,]+\.\d{2})\s*$/);if(pair){add(pending.date,pending.desc,val(pair[1]));pending=null}else if(!/^(page|date description|account number|transaction detail|checking summary)/i.test(line)&&!/^[-+]?[\d,]+\.\d{2}$/.test(line)){pending.desc+=' '+line}}
  }
- if(!rows.length)throw new Error('I could not identify transactions in this PDF. If it is a scanned/image-only statement, PDF text extraction cannot read it yet.');
+ if(!rows.length)throw new Error('No Chase transaction rows could be read from this PDF.');
  return rows
 }
 function parseBankCSV(text,file){
