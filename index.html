@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Financial Health Flow Project</title>
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Financial Health Flow">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="auth">
+  <h1>Financial Health Flow Project</h1>
+  <p class="note">Secure household cash-flow system</p>
+  <input id="email" type="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <div class="actions"><button id="signin">Sign In</button><button id="signup" class="secondary">Create Account</button></div>
+  <p id="msg"></p>
+</div>
+<div id="app" class="hidden">
+  <header>
+    <div><small>HOUSEHOLD CASH-FLOW SYSTEM</small><h1>Financial Health Flow Project</h1></div>
+    <div><span>● Supabase synced</span><button id="signout" class="secondary">Sign Out</button></div>
+  </header>
+  <nav id="nav"></nav>
+  <main id="content"></main>
+</div>
+<script type="module" src="/app.js"></script>
+<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js'))}</script>
+</body>
+</html>
