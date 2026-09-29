@@ -1,0 +1,1 @@
+{"name":"Financial Health Flow Project","short_name":"Health Flow","description":"Household cash-flow, bills, savings, and financial health tracking.","start_url":"/","scope":"/","display":"standalone","background_color":"#0b1020","theme_color":"#0b1020","orientation":"portrait-primary","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
