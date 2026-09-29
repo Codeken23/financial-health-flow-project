@@ -128,7 +128,27 @@ function csvRows(text){
 }
 async function fileBytes(file){return await new Promise((resolve,reject)=>{let r=new FileReader();r.onload=()=>resolve(new Uint8Array(r.result));r.onerror=()=>reject(r.error||new Error('Could not read the selected file.'));r.readAsArrayBuffer(file)})}
 async function pdfText(file){let bytes=await fileBytes(file),pdf=await pdfjsLib.getDocument({data:bytes}).promise,out=[];for(let n=1;n<=pdf.numPages;n++){let p=await pdf.getPage(n),t=await p.getTextContent(),items=t.items.filter(x=>x.str);items.sort((a,b)=>Math.abs(b.transform[5]-a.transform[5])>3?b.transform[5]-a.transform[5]:a.transform[4]-b.transform[4]);let lines=[],cur=[],y=null;for(let it of items){let iy=it.transform[5];if(y===null||Math.abs(iy-y)<=3){cur.push(it);y=y===null?iy:y}else{lines.push(cur.sort((a,b)=>a.transform[4]-b.transform[4]).map(x=>x.str).join(' '));cur=[it];y=iy}}if(cur.length)lines.push(cur.sort((a,b)=>a.transform[4]-b.transform[4]).map(x=>x.str).join(' '));out.push(lines.join('\n'))}return out.join('\n')}
-function parseBankPDF(text,file){let lines=text.split(/\n+/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean),rows=[];const dateRe=/^(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?)/,moneyRe=/-?\(?\$?[\d,]+\.\d{2}\)?/g;let year=new Date().getFullYear();let ym=text.match(/(?:statement|ending|through|to)\D{0,30}(20\d{2})/i);if(ym)year=Number(ym[1]);for(let line of lines){let dm=line.match(dateRe);if(!dm)continue;let vals=[...(line.match(moneyRe)||[])];if(!vals.length)continue;let raw=vals[vals.length-1],num=Number(raw.replace(/[$,()]/g,m=>m==='('?'-':''));if(!Number.isFinite(num)||num===0)continue;let ds=dm[1],parts=ds.split(/[\/-]/),date;if(parts.length===2)date=year+'-'+String(parts[0]).padStart(2,'0')+'-'+String(parts[1]).padStart(2,'0');else{let yy=Number(parts[2]);if(yy<100)yy+=2000;date=yy+'-'+String(parts[0]).padStart(2,'0')+'-'+String(parts[1]).padStart(2,'0')}let desc=line.slice(dm[0].length,line.lastIndexOf(raw)).trim().replace(/\s+[-+]?\$?[\d,]+\.\d{2}\s*$/,'').trim()||'Bank transaction';let lower=line.toLowerCase(),credit=/deposit|credit|payroll|direct dep|interest|refund|zelle.*from|transfer from/.test(lower),debit=/withdraw|debit|purchase|payment|fee|check|atm|zelle.*to|transfer to/.test(lower);let type=credit&&!debit?'Credit':debit&&!credit?'Debit':num<0?'Debit':'Debit',amt=Math.abs(num),fp=[date,desc.toLowerCase().replace(/\s+/g,' ').trim(),amt.toFixed(2),type].join('|');rows.push({household_id:hh.id,transaction_date:date,description:desc,amount:amt,transaction_type:type,source_file:file,fingerprint:fp,review_status:'Pending'})}if(!rows.length)throw new Error('I could not identify transactions in this PDF. If it is a scanned/image-only statement, PDF text extraction cannot read it yet.');return rows}
+function parseBankPDF(text,file){
+ let lines=text.split(/\n+/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean),rows=[],year=Number((text.match(/through\s+\w+\s+\d{1,2},\s*(20\d{2})/i)||[])[1])||new Date().getFullYear(),pending=null;
+ const dateRe=/^(\d{2}\/\d{2})\s+/, pairRe=/(-?\$?[\d,]+\.\d{2})\s+(-?\$?[\d,]+\.\d{2})\s*$/, oneRe=/(-?\$?[\d,]+\.\d{2})\s*$/;
+ const val=s=>Number(String(s).replace(/[$,]/g,'')),make=(date,desc,amt,type)=>{let fp=[date,desc.toLowerCase().replace(/\s+/g,' ').trim(),Math.abs(amt).toFixed(2),type].join('|');rows.push({household_id:hh.id,transaction_date:date,description:desc,amount:Math.abs(amt),transaction_type:type,source_file:file,fingerprint:fp,review_status:'Pending'})};
+ for(let line of lines){
+  let dm=line.match(dateRe);
+  if(dm){
+   let [mm,dd]=dm[1].split('/'),date=year+'-'+mm+'-'+dd,rest=line.slice(dm[0].length).trim(),pair=rest.match(pairRe),one=rest.match(oneRe);
+   if(pair){let amt=val(pair[1]),desc=rest.slice(0,pair.index).trim();make(date,desc,amt,amt<0?'Debit':'Credit');pending=null}
+   else if(one){let last=val(one[1]),desc=rest.slice(0,one.index).trim(),credit=/deposit|payment from|transfer from|refund|interest/i.test(desc),debit=/purchase|payment to|transfer to|withdrawal|direct debit|loanpymnt|fee/i.test(desc);if(credit||debit){make(date,desc,last,credit&&!debit?'Credit':'Debit');pending=null}else pending={date,desc:rest}}
+   else pending={date,desc:rest};
+  }else if(pending){
+   let pair=line.match(pairRe),one=line.match(oneRe);
+   if(pair){let amt=val(pair[1]);make(pending.date,(pending.desc+' '+line.slice(0,pair.index)).trim(),amt,amt<0?'Debit':'Credit');pending=null}
+   else if(one){let amt=val(one[1]),desc=(pending.desc+' '+line.slice(0,one.index)).trim();make(pending.date,desc,amt,amt<0?'Debit':'Credit');pending=null}
+   else if(!/^(page|date description|account number|transaction detail)/i.test(line))pending.desc+=' '+line;
+  }
+ }
+ if(!rows.length)throw new Error('I could not identify transactions in this PDF. If it is a scanned/image-only statement, PDF text extraction cannot read it yet.');
+ return rows
+}
 function parseBankCSV(text,file){
  let r=csvRows(text);if(r.length<2)throw new Error('No transactions found in this CSV.');
  let h=r[0].map(x=>x.toLowerCase().replace(/[^a-z0-9]/g,'')),idx=(...names)=>{for(let n of names){let i=h.indexOf(n);if(i>=0)return i}return-1},
