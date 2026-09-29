@@ -8,8 +8,8 @@ inR=(s,a,z)=>{let d=new Date(s+'T00:00:00');return d>=a&&d<=z},
 monthKey=d=>d.slice(0,7),monthStart=m=>m+'-01',monthLabel=m=>new Date(m+'-01T00:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'});
 const card=(l,v)=>'<div class="card"><span>'+l+'</span><strong>'+v+'</strong></div>';
 
-let hh=null,inc=[],exp=[],bills=[],res=[],debts=[],sav=[],savtx=[],plans=[],planItems=[],tab='Dashboard',selectedPlanMonth=iso(new Date()).slice(0,7),savingsFlash='';
-const tabs=['Dashboard','Income','Expenses','Bills','Savings','Monthly Game Plan','Monthly Health','Weekly History','Debts'];
+let hh=null,inc=[],exp=[],bills=[],res=[],debts=[],sav=[],savtx=[],plans=[],planItems=[],banktx=[],tab='Dashboard',selectedPlanMonth=iso(new Date()).slice(0,7),savingsFlash='';
+const tabs=['Dashboard','Income','Expenses','Bills','Savings','Bank Statements','Monthly Game Plan','Monthly Health','Weekly History','Debts'];
 
 $('signin').onclick=async()=>{let{error}=await sb.auth.signInWithPassword({email:$('email').value,password:$('password').value});$('msg').textContent=error?error.message:''};
 $('signup').onclick=async()=>{let{error}=await sb.auth.signUp({email:$('email').value,password:$('password').value});$('msg').textContent=error?error.message:'Account created. Confirm email if requested.'};
@@ -24,7 +24,7 @@ async function boot(u){
  hh=h;await load()
 }
 async function load(){
- let hid=hh.id,[a,b,c,d,e,f,g,h,i]=await Promise.all([
+ let hid=hh.id,[a,b,c,d,e,f,g,h,i,j]=await Promise.all([
   sb.from('income').select('*').eq('household_id',hid).order('received_date',{ascending:false}),
   sb.from('expenses').select('*').eq('household_id',hid).order('paid_date',{ascending:false}),
   sb.from('bills').select('*').eq('household_id',hid).order('due_date'),
@@ -33,10 +33,11 @@ async function load(){
   sb.from('savings_accounts').select('*').eq('household_id',hid).order('created_at'),
   sb.from('savings_transactions').select('*').eq('household_id',hid).order('transaction_date',{ascending:false}),
   sb.from('monthly_gameplans').select('*').eq('household_id',hid).order('plan_month'),
-  sb.from('monthly_plan_items').select('*').eq('household_id',hid).order('due_date',{ascending:true})
- ]),err=a.error||b.error||c.error||d.error||e.error||f.error||g.error||h.error||i.error;
+  sb.from('monthly_plan_items').select('*').eq('household_id',hid).order('due_date',{ascending:true}),
+  sb.from('bank_transactions').select('*').eq('household_id',hid).order('transaction_date',{ascending:false})
+ ]),err=a.error||b.error||c.error||d.error||e.error||f.error||g.error||h.error||i.error||j.error;
  if(err){showErr(err.message);return}
- inc=a.data||[];exp=b.data||[];bills=c.data||[];res=d.data||[];debts=e.data||[];sav=f.data||[];savtx=g.data||[];plans=h.data||[];planItems=i.data||[];
+ inc=a.data||[];exp=b.data||[];bills=c.data||[];res=d.data||[];debts=e.data||[];sav=f.data||[];savtx=g.data||[];plans=h.data||[];planItems=i.data||[];banktx=j.data||[];
  nav();render()
 }
 function showErr(m){$('content').innerHTML='<div class="panel"><h2>Error</h2><p class="neg">'+m+'</p></div>'}
@@ -73,6 +74,7 @@ function render(){
   if(tab==='Expenses')c.innerHTML=expenseView();
   if(tab==='Bills')c.innerHTML=billsView();
   if(tab==='Savings')c.innerHTML=savingsView();
+  if(tab==='Bank Statements')c.innerHTML=bankView();
   if(tab==='Monthly Game Plan')c.innerHTML=gameView();
   if(tab==='Monthly Health')c.innerHTML=monthView();
   if(tab==='Weekly History')c.innerHTML=weekView();
@@ -115,6 +117,30 @@ function savingsView(){
  '<div class="panel"><h2>Savings Accounts</h2>'+sav.map(x=>{let pct=Number(x.target_balance)>0?Math.min(100,Number(x.current_balance)/Number(x.target_balance)*100):0;return'<div style="margin:16px 0"><strong>'+x.name+'</strong><p class="note">'+money(x.current_balance)+' of '+money(x.target_balance||0)+'</p><div class="progress"><i style="width:'+pct+'%"></i></div></div>'}).join('')+'</div>'+
  '<div class="panel"><h2>Savings History</h2><table><thead><tr><th>Date</th><th>Account</th><th>Type</th><th>Amount</th><th>Source</th></tr></thead><tbody>'+savtx.map(t=>{let a=sav.find(x=>x.id===t.savings_account_id);return'<tr><td>'+t.transaction_date+'</td><td>'+(a?.name||'')+'</td><td>'+t.transaction_type+'</td><td>'+money(t.amount)+'</td><td>'+(t.source||'')+'</td></tr>'}).join('')+'</tbody></table></div>'
 }
+
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function csvRows(text){
+ let rows=[],row=[],v='',q=false;
+ for(let i=0;i<text.length;i++){let ch=text[i],n=text[i+1];if(ch==='"'){if(q&&n==='"'){v+='"';i++}else q=!q}else if(ch===','&&!q){row.push(v.trim());v=''}else if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&n==='\n')i++;row.push(v.trim());v='';if(row.some(x=>x!==''))rows.push(row);row=[]}else v+=ch}
+ row.push(v.trim());if(row.some(x=>x!==''))rows.push(row);return rows
+}
+function parseBankCSV(text,file){
+ let r=csvRows(text);if(r.length<2)throw new Error('No transactions found in this CSV.');
+ let h=r[0].map(x=>x.toLowerCase().replace(/[^a-z0-9]/g,'')),idx=(...names)=>{for(let n of names){let i=h.indexOf(n);if(i>=0)return i}return-1},
+ di=idx('date','transactiondate','posteddate','postingdate'),xi=idx('description','memo','details','name','merchant'),ai=idx('amount'),debi=idx('debit','withdrawal','withdrawals'),credi=idx('credit','deposit','deposits');
+ if(di<0||xi<0||(ai<0&&debi<0&&credi<0))throw new Error('I could not identify Date, Description, and Amount/Debit/Credit columns. Export a standard transaction CSV from your bank.');
+ return r.slice(1).map(x=>{let raw=ai>=0?Number(String(x[ai]).replace(/[$,()]/g,m=>m==='('?'-':'')):0,deb=debi>=0?Math.abs(Number(String(x[debi]||0).replace(/[$,]/g,''))||0):0,cred=credi>=0?Math.abs(Number(String(x[credi]||0).replace(/[$,]/g,''))||0):0,type=ai>=0?(raw<0?'Debit':'Credit'):(deb>0?'Debit':'Credit'),amt=ai>=0?Math.abs(raw):(deb||cred),d=new Date(x[di]);
+ let date=isNaN(d)?String(x[di]).slice(0,10):iso(d),desc=x[xi]||'Bank transaction',fp=[date,desc.toLowerCase().replace(/\s+/g,' ').trim(),amt.toFixed(2),type].join('|');
+ return{household_id:hh.id,transaction_date:date,description:desc,amount:amt,transaction_type:type,source_file:file,fingerprint:fp,review_status:'Pending'}
+ }).filter(x=>x.amount>0&&/^\d{4}-\d{2}-\d{2}$/.test(x.transaction_date))
+}
+function bankView(){
+ let p=banktx.filter(x=>x.review_status==='Pending'),done=banktx.filter(x=>x.review_status!=='Pending');
+ return '<div class="panel"><h2>Bank Statements</h2><p class="note">Upload a bank transaction CSV. Nothing is added to Income or Expenses until you review and import it. Re-uploading the same transactions is blocked automatically.</p><div class="form"><input id="bankFile" type="file" accept=".csv,text/csv"><button id="uploadBank">Upload CSV</button></div></div>'+
+ '<div class="panel"><h2>Transactions to Review</h2>'+(p.length?'<table><thead><tr><th>Date</th><th>Description</th><th>Type</th><th>Amount</th><th>Category</th><th>Action</th></tr></thead><tbody>'+p.map(x=>'<tr><td>'+x.transaction_date+'</td><td>'+esc(x.description)+'</td><td>'+x.transaction_type+'</td><td>'+money(x.amount)+'</td><td><input class="bankCat" data-id="'+x.id+'" value="'+esc(x.category||'Other')+'"></td><td><div class="actions"><button class="small bankImport" data-id="'+x.id+'">Import</button><button class="small secondary bankSkip" data-id="'+x.id+'">Skip</button></div></td></tr>').join('')+'</tbody></table>':'<p class="note">No transactions waiting for review.</p>')+'</div>'+
+ '<div class="panel"><h2>Import History</h2><table><thead><tr><th>Date</th><th>Description</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody>'+done.slice(0,100).map(x=>'<tr><td>'+x.transaction_date+'</td><td>'+esc(x.description)+'</td><td>'+x.transaction_type+'</td><td>'+money(x.amount)+'</td><td>'+x.review_status+'</td></tr>').join('')+'</tbody></table></div>'
+}
+
 function gameView(){
  const p=plans.find(x=>monthKey(x.plan_month)===selectedPlanMonth),items=p?planItems.filter(x=>x.gameplan_id===p.id):[],planned=items.reduce((t,x)=>t+Number(x.amount||0),0),
  expected=Number(p?.expected_income||0),save=Number(p?.savings_target||0),debt=Number(p?.debt_extra_target||0),projected=expected-planned-save-debt,
@@ -162,6 +188,16 @@ async function ensurePlan(){
  if(error){alert(error.message);return null}return data
 }
 function wire(){
+
+ if($('uploadBank'))$('uploadBank').onclick=async()=>{let f=$('bankFile').files[0];if(!f){alert('Choose a CSV statement first.');return}try{let rows=parseBankCSV(await f.text(),f.name);if(!rows.length){alert('No usable transactions found.');return}let{error}=await sb.from('bank_transactions').upsert(rows,{onConflict:'household_id,fingerprint',ignoreDuplicates:true});if(error)alert(error.message);else{alert('Statement loaded. Review the transactions before importing them.');await load()}}catch(e){alert(e.message)}};
+ document.querySelectorAll('.bankSkip').forEach(b=>b.onclick=async()=>{let{error}=await sb.from('bank_transactions').update({review_status:'Skipped'}).eq('id',b.dataset.id);if(error)alert(error.message);else await load()});
+ document.querySelectorAll('.bankImport').forEach(b=>b.onclick=async()=>{let x=banktx.find(t=>t.id===b.dataset.id);if(!x)return;let cat=document.querySelector('.bankCat[data-id="'+x.id+'"]').value||'Other';
+ let duplicate=x.transaction_type==='Debit'?exp.some(e=>e.paid_date===x.transaction_date&&Math.abs(Number(e.amount)-Number(x.amount))<.01):inc.some(i=>i.received_date===x.transaction_date&&Math.abs(Number(i.amount)-Number(x.amount))<.01);
+ if(duplicate&&!confirm('A '+x.transaction_type.toLowerCase()+' for the same amount already exists on this date. Import anyway?')){await sb.from('bank_transactions').update({review_status:'Duplicate',category:cat}).eq('id',x.id);await load();return}
+ if(x.transaction_type==='Debit'){let{data,error}=await sb.from('expenses').insert({household_id:hh.id,category:cat,description:x.description,amount:Number(x.amount),need_want:'Need',paid_date:x.transaction_date,status:'Paid',notes:'Imported from bank statement'}).select('id').single();if(error){alert(error.message);return}await sb.from('bank_transactions').update({review_status:'Imported',category:cat,imported_expense_id:data.id}).eq('id',x.id)}
+ else{let{data,error}=await sb.from('income').insert({household_id:hh.id,person:'You',income_type:'Other',amount:Number(x.amount),tax_rate:0,received_date:x.transaction_date,notes:'Imported from bank statement: '+x.description}).select('id').single();if(error){alert(error.message);return}await sb.from('bank_transactions').update({review_status:'Imported',category:cat,imported_income_id:data.id}).eq('id',x.id)}
+ await load()});
+
  if($('addi'))$('addi').onclick=async()=>{if(!$('ia').value)return;let{error}=await sb.from('income').insert({household_id:hh.id,person:$('ip').value,income_type:$('it').value,amount:Number($('ia').value),tax_rate:Number($('itr').value||0),received_date:$('idate').value});if(error)alert(error.message);else await load()};
  if($('adde'))$('adde').onclick=async()=>{if(!$('ea').value)return;let id=$('editExpenseId').value;let row={household_id:hh.id,category:$('ec').value||'Other',description:$('ed').value,amount:Number($('ea').value),need_want:$('enw').value,paid_date:$('edate').value,status:$('estatus').value};let q;if(id){q=await sb.from('expenses').update(row).eq('id',id);let x=exp.find(e=>e.id===id);if(!q.error&&x?.bill_id){if($('estatus').value==='Paid'){await sb.from('bills').update({amount:Number($('ea').value),paid_date:$('edate').value,status:'Paid'}).eq('id',x.bill_id)}else{await sb.from('bills').update({amount:Number($('ea').value),paid_date:null,status:'Unpaid'}).eq('id',x.bill_id)}}}else{q=await sb.from('expenses').insert(row)}if(q.error)alert(q.error.message);else await load()};
  document.querySelectorAll('.editExpense').forEach(btn=>btn.onclick=()=>{let x=exp.find(e=>e.id===btn.dataset.id);if(!x)return;$('editExpenseId').value=x.id;$('edate').value=x.paid_date;$('ec').value=x.category||'Other';$('ed').value=x.description||'';$('ea').value=Number(x.amount);$('enw').value=x.need_want||'Need';$('estatus').value=x.status||'Paid';$('expenseFormTitle').textContent='Edit Expense';$('expenseEditNote').textContent='Update the amount, date, category, description, Need/Want classification, or payment status, then tap Save Changes.';$('adde').textContent='Save Changes';$('cancelExpenseEdit').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})});
